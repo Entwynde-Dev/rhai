@@ -1,18 +1,33 @@
 //! Implement function-calling mechanism for [`Engine`].
 
 use super::{get_builtin_binary_op_fn, get_builtin_op_assignment_fn, RhaiFunc};
-use crate::api::default_limits::MAX_DYNAMIC_PARAMETERS;
-use crate::engine::{
-    KEYWORD_DEBUG, KEYWORD_EVAL, KEYWORD_FN_PTR, KEYWORD_FN_PTR_CALL, KEYWORD_FN_PTR_CURRY,
-    KEYWORD_IS_DEF_VAR, KEYWORD_PRINT, KEYWORD_TYPE_OF,
-};
 #[cfg(feature = "internals")]
 use crate::eval::EvalContext;
-use crate::eval::{Caches, FnResolutionCacheEntry, GlobalRuntimeState};
-use crate::types::Token;
 use crate::{
-    calc_fn_hash_full, Dynamic, Engine, FnArgsVec, ImmutableString, Position, RhaiResult,
-    RhaiResultOf, Scope, Shared, ERR,
+    api::default_limits::MAX_DYNAMIC_PARAMETERS,
+    calc_fn_hash_full,
+    engine::{
+        KEYWORD_DEBUG,
+        KEYWORD_EVAL,
+        KEYWORD_FN_PTR,
+        KEYWORD_FN_PTR_CALL,
+        KEYWORD_FN_PTR_CURRY,
+        KEYWORD_IS_DEF_VAR,
+        KEYWORD_PRINT,
+        KEYWORD_TYPE_OF,
+    },
+    eval::{Caches, FnResolutionCacheEntry, GlobalRuntimeState},
+    types::Token,
+    Dynamic,
+    Engine,
+    FnArgsVec,
+    ImmutableString,
+    Position,
+    RhaiResult,
+    RhaiResultOf,
+    Scope,
+    Shared,
+    ERR,
 };
 #[cfg(feature = "no_std")]
 use hashbrown::hash_map::Entry;
@@ -22,7 +37,8 @@ use std::collections::hash_map::Entry;
 use std::prelude::v1::*;
 use std::{
     any::{type_name, TypeId},
-    fmt, mem,
+    fmt,
+    mem,
 };
 
 /// Arguments to a function call, which is a list of [`&mut Dynamic`][Dynamic].
@@ -279,7 +295,8 @@ impl Engine {
             args.iter()
                 .map(|a| if a.is_string() {
                     "&str | ImmutableString | String"
-                } else {
+                }
+                else {
                     self.map_type_name(a.type_name())
                 })
                 .collect::<FnArgsVec<_>>()
@@ -329,7 +346,7 @@ impl Engine {
             SyntacticFn::TypeOf if args.len() == 1 => {
                 let typ = self.get_interned_string(self.map_type_name(args[0].type_name()));
                 return Ok(typ.into());
-            }
+            },
             SyntacticFn::TypeOf => (),
 
             // Handle is_shared()
@@ -356,7 +373,7 @@ impl Engine {
                         self.has_script_fn(_global, _caches, hash_script).into()
                     })
                     .unwrap_or(Dynamic::FALSE));
-            }
+            },
             #[cfg(not(feature = "no_function"))]
             #[cfg(not(feature = "no_object"))]
             SyntacticFn::IsDefFn if args.len() == 3 => {
@@ -379,7 +396,7 @@ impl Engine {
                         self.has_script_fn(_global, _caches, hash_script).into()
                     })
                     .unwrap_or(Dynamic::FALSE));
-            }
+            },
             #[cfg(not(feature = "no_function"))]
             SyntacticFn::IsDefFn => (),
 
@@ -461,7 +478,8 @@ impl Engine {
                             // Do not cache "one-hit wonders"
                             *local_entry = Some(new_entry);
                             local_entry.as_ref()
-                        } else {
+                        }
+                        else {
                             // Cache entry
                             entry.insert(Some(new_entry)).as_ref()
                         };
@@ -517,7 +535,7 @@ impl Engine {
                                                 },
                                                 source: None,
                                             })
-                                    }
+                                    },
                                     Some(token) => get_builtin_binary_op_fn(
                                         token, args[0], args[1],
                                     )
@@ -536,7 +554,8 @@ impl Engine {
                             // Do not cache "one-hit wonders"
                             *local_entry = builtin;
                             local_entry.as_ref()
-                        } else {
+                        }
+                        else {
                             // Cache entry
                             entry.insert(builtin).as_ref()
                         };
@@ -551,7 +570,8 @@ impl Engine {
                             {
                                 // Replace with `Dynamic`
                                 TypeId::of::<Dynamic>()
-                            } else {
+                            }
+                            else {
                                 a.type_id()
                             }
                         }),
@@ -559,7 +579,7 @@ impl Engine {
 
                     bitmask += 1;
                 }
-            }
+            },
         }
     }
 
@@ -573,6 +593,7 @@ impl Engine {
     /// All function arguments not in the first position are always passed by value and thus consumed.
     ///
     /// **DO NOT** reuse the argument values except for the first `&mut` argument - all others are silently replaced by `()`!
+    #[expect(const_item_mutation)]
     pub(crate) fn exec_native_fn_call(
         &self,
         global: &mut GlobalRuntimeState,
@@ -653,9 +674,8 @@ impl Engine {
                 .then(|| (self, name, source.as_deref(), &*global, pos).into());
 
             let mut _result = match func {
-                f if !f.is_pure() && args.get(0).map_or(false, |v| v.is_read_only()) => {
-                    Err(ERR::ErrorNonPureMethodCallOnConstant(name.to_string(), pos).into())
-                }
+                f if !f.is_pure() && args.get(0).map_or(false, |v| v.is_read_only()) =>
+                    Err(ERR::ErrorNonPureMethodCallOnConstant(name.to_string(), pos).into()),
                 RhaiFunc::Plugin { func } => func.call(context, args),
                 RhaiFunc::StaticPlugin { func } => func.call(context, args),
                 RhaiFunc::Pure { func, .. } | RhaiFunc::Method { func, .. } => func(context, args),
@@ -711,7 +731,7 @@ impl Engine {
                         print(&text);
                     }
                     (Dynamic::UNIT, false)
-                }
+                },
                 KEYWORD_DEBUG => {
                     if let Some(ref debug) = self.debug {
                         let text = result.into_immutable_string().map_err(|typ| {
@@ -721,7 +741,7 @@ impl Engine {
                         debug(&text, global.source(), pos);
                     }
                     (Dynamic::UNIT, false)
-                }
+                },
                 _ => (result, is_method),
             });
         }
@@ -743,7 +763,8 @@ impl Engine {
                     pos,
                 )
                 .into()
-            } else {
+            }
+            else {
                 let t0 = self.map_type_name(args[0].type_name());
                 let t1 = self.map_type_name(args[1].type_name());
                 ERR::ErrorIndexingType(format!("{t0} [{t1}]"), pos).into()
@@ -760,7 +781,8 @@ impl Engine {
                     pos,
                 )
                 .into()
-            } else {
+            }
+            else {
                 let t0 = self.map_type_name(args[0].type_name());
                 let t1 = self.map_type_name(args[1].type_name());
                 let t2 = self.map_type_name(args[2].type_name());
@@ -780,7 +802,8 @@ impl Engine {
                     pos,
                 )
                 .into()
-                } else {
+                }
+                else {
                     let t0 = self.map_type_name(args[0].type_name());
                     ERR::ErrorDotExpr(
                         format!(
@@ -790,7 +813,7 @@ impl Engine {
                     )
                     .into()
                 })
-            }
+            },
 
             // Setter function not found?
             #[cfg(not(feature = "no_object"))]
@@ -805,7 +828,8 @@ impl Engine {
                     pos,
                 )
                 .into()
-                } else {
+                }
+                else {
                     let t0 = self.map_type_name(args[0].type_name());
                     let t1 = self.map_type_name(args[1].type_name());
                     ERR::ErrorDotExpr(
@@ -816,12 +840,11 @@ impl Engine {
                 )
                 .into()
                 })
-            }
+            },
 
             // Raise error
-            _ => {
-                Err(ERR::ErrorFunctionNotFound(self.gen_fn_call_signature(name, args), pos).into())
-            }
+            _ =>
+                Err(ERR::ErrorFunctionNotFound(self.gen_fn_call_signature(name, args), pos).into()),
         }
     }
 
@@ -835,6 +858,7 @@ impl Engine {
     /// All function arguments not in the first position are always passed by value and thus consumed.
     ///
     /// **DO NOT** reuse the argument values except for the first `&mut` argument - all others are silently replaced by `()`!
+    #[allow(const_item_mutation)]
     pub(crate) fn exec_fn_call(
         &self,
         global: &mut GlobalRuntimeState,
@@ -880,7 +904,8 @@ impl Engine {
             }
 
             if let Some(FnResolutionCacheEntry { func, source }) = resolved.cloned() {
-                let RhaiFunc::Script { fn_def, env } = func else {
+                let RhaiFunc::Script { fn_def, env } = func
+                else {
                     unreachable!("Script function expected");
                 };
 
@@ -890,11 +915,10 @@ impl Engine {
                 // Short-circuit empty script function body
                 match fn_def.body {
                     #[cfg(not(feature = "no_ast"))]
-                    crate::func::ScriptFuncPayload::Statements(ref block) => {
+                    crate::func::ScriptFuncPayload::Statements(ref block) =>
                         if block.is_empty() {
                             return Ok((Dynamic::UNIT, false));
-                        }
-                    }
+                        },
                     // We don't know about Grain functions, so call it anyway
                     #[cfg(feature = "grain")]
                     crate::func::ScriptFuncPayload::GrainVM { .. } => (),
@@ -904,7 +928,8 @@ impl Engine {
                 let mut empty_scope;
                 let scope = if let Some(scope) = _scope {
                     scope
-                } else {
+                }
+                else {
                     empty_scope = Scope::new();
                     &mut empty_scope
                 };
@@ -922,7 +947,8 @@ impl Engine {
                     self.call_script_fn(
                         global, caches, scope, this_ptr, env, fn_def, args, true, pos,
                     )
-                } else {
+                }
+                else {
                     // Normal call of script function
                     let value_copy = &mut Dynamic::UNIT;
                     let backup = &mut ArgBackup::new();
@@ -958,12 +984,12 @@ impl Engine {
                     None => {
                         empty_scope = Scope::new();
                         &mut empty_scope
-                    }
+                    },
                 };
                 let context = EvalContext::new(self, global, caches, scope, None);
                 match callback(fn_name, args, _is_method_call, context) {
                     Ok(Some(value)) => return Ok((value, false)),
-                    Ok(None) => {}
+                    Ok(None) => {},
                     Err(err) => return Err(err),
                 }
             }
@@ -1048,7 +1074,8 @@ impl Engine {
                             && bitmask & (1usize << (max_dynamic_count - i - 1)) != 0
                         {
                             std::any::TypeId::of::<Dynamic>()
-                        } else {
+                        }
+                        else {
                             a.type_id()
                         }
                     }),
@@ -1084,11 +1111,10 @@ impl Engine {
                 let global = global.into();
 
                 self.call_script_fn(global, _caches, scope, None, env, fn_def, args, true, pos)
-            }
+            },
 
-            Some(f) if !f.is_pure() && args[0].is_read_only() => {
-                Err(ERR::ErrorNonPureMethodCallOnConstant(fn_name.to_string(), pos).into())
-            }
+            Some(f) if !f.is_pure() && args[0].is_read_only() =>
+                Err(ERR::ErrorNonPureMethodCallOnConstant(fn_name.to_string(), pos).into()),
 
             Some(f @ (RhaiFunc::Plugin { .. } | RhaiFunc::StaticPlugin { .. })) => {
                 let func = f.get_plugin_fn().unwrap();
@@ -1097,7 +1123,7 @@ impl Engine {
                     .then(|| (self, fn_name, module.id(), &*global, pos).into());
                 func.call(context, args)
                     .and_then(|r| self.check_data_size(r, pos))
-            }
+            },
 
             Some(
                 RhaiFunc::Pure {
@@ -1110,16 +1136,17 @@ impl Engine {
                 let context =
                     has_context.then(|| (self, fn_name, module.id(), &*global, pos).into());
                 func(context, args).and_then(|r| self.check_data_size(r, pos))
-            }
+            },
 
             Some(RhaiFunc::Iterator { .. }) => {
                 unreachable!("iterator functions should not occur here")
-            }
+            },
 
             None => Err(ERR::ErrorFunctionNotFound(
                 if namespace.is_empty() {
                     self.gen_fn_call_signature(fn_name, args)
-                } else {
+                }
+                else {
                     format!(
                         "{}{}{}",
                         namespace
