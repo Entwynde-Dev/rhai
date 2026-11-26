@@ -101,10 +101,16 @@ fn test_map_template_evaluation_and_isolation() {
         assert_eq!(engine.eval::<INT>("#{ a: 42, b: () }.a").unwrap(), 42);
         assert_eq!(engine.eval_with_scope::<INT>(&mut scope, "#{ a: 42, b: input }.a").unwrap(), 42);
 
+        // Values that only become constant after optimization are not in the template yet
+        assert_eq!(engine.eval::<INT>("#{ a: 42, b: { 1 } }.b").unwrap(), 1);
+        assert_eq!(engine.eval::<INT>("#{ a: if true { 1 } else { 2 } }.a").unwrap(), 1);
+        assert_eq!(engine.eval::<INT>("#{ a: 42, b: (() ?? 1) }.b").unwrap(), 1);
+
         #[cfg(not(feature = "no_index"))]
         {
             assert_eq!(engine.eval::<INT>(r#"#{ a: 42, b: () }["a"]"#).unwrap(), 42);
             assert_eq!(engine.eval_with_scope::<INT>(&mut scope, r#"#{ a: 42, b: input }["a"]"#).unwrap(), 42);
+            assert_eq!(engine.eval::<INT>(r#"#{ a: 42, b: { 1 } }["b"]"#).unwrap(), 1);
 
             let ast = engine.compile("#{ values: [#{ x: 1 }], computed: input }").unwrap();
 
@@ -341,7 +347,7 @@ fn test_map_for() {
 fn test_map_json() {
     let engine = Engine::new();
 
-    let json = r#"{"a":1, "b":true, "c":41+1, "$d e f!":"hello", "z":null}"#;
+    let json = r#"{"a":1, "b":true, "c":42, "$d e f!":"hello", "z":null, "n":-1}"#;
 
     let map = engine.parse_json(json, true).unwrap();
 
@@ -352,6 +358,7 @@ fn test_map_json() {
     assert_eq!(map["c"].as_int().unwrap(), 42);
     assert_eq!(map["$d e f!"].clone_cast::<String>(), "hello");
     let _: () = map["z"].as_unit().unwrap();
+    assert_eq!(map["n"].as_int().unwrap(), -1);
 
     #[cfg(not(feature = "no_index"))]
     {
@@ -374,7 +381,7 @@ fn test_map_json() {
                 )
                 .unwrap()
                 .len(),
-            11
+            12
         );
 
         assert_eq!(engine.eval::<String>("#{a:[#{b:42}]}.to_json()").unwrap(), r#"{"a":[{"b":42}]}"#);
@@ -390,6 +397,15 @@ fn test_map_json() {
     assert!(matches!(*engine.parse_json("{a:()}", true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
     assert!(matches!(*engine.parse_json("#{a:123+456}", true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
     assert!(matches!(*engine.parse_json("{a:`hello${world}`}", true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
+    assert!(matches!(*engine.parse_json(r#"{"a":print("x")}"#, true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
+    assert!(matches!(*engine.parse_json(r#"{"a":eval("40+2")}"#, false).unwrap_err(), EvalAltResult::ErrorParsing(..)));
+    assert!(matches!(*engine.parse_json(r#"{"a":"hello".len}"#, true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
+    #[cfg(not(feature = "no_float"))]
+    assert_eq!(engine.parse_json(r#"{"a":-1.5, "b":1e2}"#, true).unwrap()["b"].as_float().unwrap(), 100.0);
+    assert!(matches!(*engine.parse_json(r#"{"a":41+1}"#, true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
+    assert!(matches!(*engine.parse_json(r#"{"a":[1]+[2]}"#, true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
+    assert!(matches!(*engine.parse_json(r#"{"a":1 in [1]}"#, true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
+    assert!(matches!(*engine.parse_json(r#"{"a":- 1}"#, true).unwrap_err(), EvalAltResult::ErrorParsing(..)));
 }
 
 #[test]
@@ -442,4 +458,18 @@ fn test_map_missing_property_callback() {
             .unwrap(),
         143
     );
+}
+
+#[test]
+#[cfg(not(feature = "no_function"))]
+#[cfg(not(feature = "no_closure"))]
+fn test_map_json_shared_loop() {
+    let engine = Engine::new();
+
+    // A closure capturing the object map it is stored in forms a reference loop.
+    engine.eval::<String>("let m = #{}; let f = || m; m.f = f; m.to_json()").unwrap();
+    engine.eval::<String>("let m = #{}; let f = || m; m.f = f; #{a: m}.to_json()").unwrap();
+
+    // The same shared value appearing more than once is not a loop.
+    assert_eq!(engine.eval::<String>("let m = #{x: 1}; let f = || m; #{a: m, b: m}.to_json()").unwrap(), r#"{"a":{"x":1},"b":{"x":1}}"#);
 }

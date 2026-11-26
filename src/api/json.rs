@@ -23,6 +23,9 @@ impl Engine {
     ///
     /// The JSON string must be an object hash.  It cannot be a simple primitive value.
     ///
+    /// The text is not evaluated as a script: only JSON literals, objects, arrays and comments
+    /// are accepted. Expressions, identifiers and function calls are syntax errors.
+    ///
     /// Set `has_null` to `true` in order to map `null` values to `()`.
     /// Setting it to `false` causes a syntax error for any `null` value.
     ///
@@ -71,52 +74,9 @@ impl Engine {
         let (stream, tokenizer_control) = self.lex_raw(
             &scripts,
             Some(if has_null {
-                &|token, _, _| {
-                    match token {
-                        // `null` => `()`
-                        Token::Reserved(s) if &*s == "null" => Token::Unit,
-                        // `{` => `#{`
-                        Token::LeftBrace => Token::MapStart,
-                        // Disallowed syntax
-                        t @ (Token::Unit | Token::MapStart) => Token::LexError(
-                            LexError::ImproperSymbol(t.literal_syntax().to_string(), String::new())
-                                .into(),
-                        ),
-                        Token::InterpolatedString(..) => Token::LexError(
-                            LexError::ImproperSymbol(
-                                "interpolated string".to_string(),
-                                String::new(),
-                            )
-                            .into(),
-                        ),
-                        // All others
-                        _ => token,
-                    }
-                }
+                &|token, _, _| map_json_token(token, true)
             } else {
-                &|token, _, _| {
-                    match token {
-                        Token::Reserved(s) if &*s == "null" => Token::LexError(
-                            LexError::ImproperSymbol("null".to_string(), String::new()).into(),
-                        ),
-                        // `{` => `#{`
-                        Token::LeftBrace => Token::MapStart,
-                        // Disallowed syntax
-                        t @ (Token::Unit | Token::MapStart) => Token::LexError(
-                            LexError::ImproperSymbol(t.literal_syntax().to_string(), String::new())
-                                .into(),
-                        ),
-                        Token::InterpolatedString(..) => Token::LexError(
-                            LexError::ImproperSymbol(
-                                "interpolated string".to_string(),
-                                String::new(),
-                            )
-                            .into(),
-                        ),
-                        // All others
-                        _ => token,
-                    }
-                }
+                &|token, _, _| map_json_token(token, false)
             }),
         );
 
@@ -134,6 +94,43 @@ impl Engine {
         };
 
         self.eval_ast(&ast)
+    }
+}
+
+/// Map a token for [`Engine::parse_json`].
+///
+/// Only the literals and punctuation that make up JSON are allowed through.
+/// Everything else (identifiers, keywords, operators etc.) becomes a lex error,
+/// so the text cannot evaluate expressions or call functions.
+#[cfg(not(feature = "no_ast"))]
+fn map_json_token(token: Token, has_null: bool) -> Token {
+    match token {
+        // `null` => `()`
+        Token::Reserved(ref s) if has_null && &**s == "null" => Token::Unit,
+        // `{` => `#{`
+        Token::LeftBrace => Token::MapStart,
+        // Allowed JSON syntax
+        Token::IntegerConstant(..)
+        | Token::StringConstant(..)
+        | Token::CharConstant(..)
+        | Token::True
+        | Token::False
+        | Token::RightBrace
+        | Token::LeftBracket
+        | Token::RightBracket
+        | Token::Colon
+        | Token::Comma
+        | Token::LexError(..)
+        | Token::EOF => token,
+        #[cfg(not(feature = "no_float"))]
+        Token::FloatConstant(..) => token,
+        #[cfg(feature = "decimal")]
+        Token::DecimalConstant(..) => token,
+        // Disallowed syntax
+        Token::InterpolatedString(..) => Token::LexError(
+            LexError::ImproperSymbol("interpolated string".to_string(), String::new()).into(),
+        ),
+        _ => Token::LexError(LexError::ImproperSymbol(token.to_string(), String::new()).into()),
     }
 }
 
@@ -156,26 +153,41 @@ impl Engine {
 #[inline]
 #[must_use]
 pub fn format_map_as_json(map: &Map) -> String {
-    let mut result = String::from('{');
-
-    for (key, value) in map {
-        if result.len() > 1 {
-            result += ",";
-        }
-
-        write!(result, "{key:?}").unwrap();
-        result += ":";
-
-        format_dynamic_as_json(&mut result, value);
-    }
-
-    result += "}";
-
+    let mut result = String::new();
+    format_map_into_json(&mut result, map, &mut Vec::new());
     result
 }
 
+/// Format an [object map][Map] as JSON.
+///
+/// `shared` holds the shared values currently being formatted, to stop at reference loops.
+fn format_map_into_json(
+    result: &mut String,
+    map: &Map,
+    shared: &mut Vec<*const crate::Locked<Dynamic>>,
+) {
+    *result += "{";
+
+    for (i, (key, value)) in map.iter().enumerate() {
+        if i > 0 {
+            *result += ",";
+        }
+
+        write!(result, "{key:?}").unwrap();
+        *result += ":";
+
+        format_dynamic_as_json(result, value, shared);
+    }
+
+    *result += "}";
+}
+
 /// Format a [`Dynamic`] value as JSON.
-fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
+fn format_dynamic_as_json(
+    result: &mut String,
+    value: &Dynamic,
+    shared: &mut Vec<*const crate::Locked<Dynamic>>,
+) {
     match value.0 {
         Union::Unit(..) => *result += "null",
         Union::FnPtr(ref f, _, _) if f.is_curried() => {
@@ -183,12 +195,12 @@ fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
             write!(result, "{:?}", f.fn_name()).unwrap();
             f.iter_curry().for_each(|value| {
                 *result += ",";
-                format_dynamic_as_json(result, value);
+                format_dynamic_as_json(result, value, shared);
             });
             *result += "]";
         }
         Union::FnPtr(ref f, _, _) => write!(result, "{:?}", f.fn_name()).unwrap(),
-        Union::Map(ref m, ..) => *result += &format_map_as_json(m),
+        Union::Map(ref m, ..) => format_map_into_json(result, m, shared),
         #[cfg(not(feature = "no_index"))]
         Union::Array(ref a, _, _) => {
             *result += "[";
@@ -196,7 +208,7 @@ fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
                 if i > 0 {
                     *result += ",";
                 }
-                format_dynamic_as_json(result, x);
+                format_dynamic_as_json(result, x, shared);
             }
             *result += "]";
         }
@@ -213,8 +225,19 @@ fn format_dynamic_as_json(result: &mut String, value: &Dynamic) {
         }
         #[cfg(not(feature = "no_closure"))]
         Union::Shared(ref v, _, _) => {
-            let value = &*crate::func::locked_read(v).unwrap();
-            format_dynamic_as_json(result, value)
+            let ptr: *const crate::Locked<Dynamic> = &**v;
+
+            // A shared value that is already being formatted (or is locked for write
+            // by the caller) is part of a reference loop, e.g. a closure capturing the
+            // object map it is stored in.
+            match crate::func::locked_read(v) {
+                Some(value) if !shared.contains(&ptr) => {
+                    shared.push(ptr);
+                    format_dynamic_as_json(result, &value, shared);
+                    shared.pop();
+                }
+                _ => *result += "null",
+            }
         }
         _ => write!(result, "{value:?}").unwrap(),
     }

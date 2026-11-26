@@ -271,8 +271,12 @@ pub mod array_functions {
             let (a, m, s) = crate::eval::calc_array_sizes(array);
             let (ax, mx, sx) = crate::eval::calc_data_sizes(&item, true);
 
-            _ctx.engine()
-                .throw_on_size((a + pad + ax * pad, m + mx * pad, s + sx * pad))?;
+            // `pad` comes from the script, so saturate to keep the totals from wrapping
+            _ctx.engine().throw_on_size((
+                a.saturating_add(pad).saturating_add(ax.saturating_mul(pad)),
+                m.saturating_add(mx.saturating_mul(pad)),
+                s.saturating_add(sx.saturating_mul(pad)),
+            ))?;
         }
 
         array.resize(len, item);
@@ -1668,7 +1672,9 @@ pub mod array_functions {
             array.sort_by(|a, b| {
                 let a = a.as_float().unwrap();
                 let b = b.as_float().unwrap();
-                a.partial_cmp(&b).unwrap_or(Ordering::Equal)
+                // NaN sorts after every number, otherwise the order is not total and `sort_by` may panic.
+                a.partial_cmp(&b)
+                    .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
             });
             return Ok(());
         }
@@ -1775,7 +1781,11 @@ pub mod array_functions {
             array.sort_by(|a, b| {
                 let a = a.as_float().unwrap();
                 let b = b.as_float().unwrap();
-                match a.partial_cmp(&b).unwrap_or(Ordering::Equal) {
+                // NaN sorts before every number, otherwise the order is not total and `sort_by` may panic.
+                match a
+                    .partial_cmp(&b)
+                    .unwrap_or_else(|| a.is_nan().cmp(&b.is_nan()))
+                {
                     Ordering::Less => Ordering::Greater,
                     Ordering::Equal => Ordering::Equal,
                     Ordering::Greater => Ordering::Less,

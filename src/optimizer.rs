@@ -168,14 +168,28 @@ fn optimize_stmt_block(
         Stmt::is_pure
     };
 
+    let returns_value = |stmt: &Stmt| match stmt {
+        // A loop returns a value via `break`, which is never pure.
+        Stmt::While(..) | Stmt::Do(..) | Stmt::For(..) => !stmt.is_pure(),
+        _ => stmt.returns_value(),
+    };
+
     // Flatten blocks
     while let Some(n) = statements.iter().position(
         |s| matches!(s, Stmt::Block(block, ..) if !block.iter().any(Stmt::is_block_dependent)),
     ) {
         let (first, second) = statements.split_at_mut(n);
         let mut stmt = second[0].take();
+        let pos = stmt.position();
         let stmts = match stmt {
-            Stmt::Block(ref mut block, ..) => block.statements_mut(),
+            Stmt::Block(ref mut block, ..) => {
+                let stmts = block.statements_mut();
+                // An empty block still returns `()`.
+                if stmts.is_empty() {
+                    stmts.push(Stmt::Noop(pos));
+                }
+                stmts
+            }
             _ => unreachable!("Stmt::Block expected but gets {:?}", stmt),
         };
         statements = first
@@ -282,7 +296,7 @@ fn optimize_stmt_block(
                         state.set_dirty();
                         statements.clear();
                     }
-                    [ref stmt] if !stmt.returns_value() && is_pure_for_this_block(stmt) => {
+                    [ref stmt] if !returns_value(stmt) && is_pure_for_this_block(stmt) => {
                         state.set_dirty();
                         statements.clear();
                     }
@@ -290,7 +304,7 @@ fn optimize_stmt_block(
                     [.., ref last_stmt, Stmt::Return(None, options, ..)]
                         if reduce_return
                             && !options.contains(ASTFlags::BREAK)
-                            && !last_stmt.returns_value() =>
+                            && !returns_value(last_stmt) =>
                     {
                         state.set_dirty();
                         statements.pop().unwrap();
@@ -306,17 +320,17 @@ fn optimize_stmt_block(
                     }
                     // { ...; stmt; noop } -> done
                     [.., ref second_last_stmt, Stmt::Noop(..)]
-                        if second_last_stmt.returns_value() =>
+                        if returns_value(second_last_stmt) =>
                     {
                         break
                     }
                     // { ...; stmt_that_returns; pure_non_value_stmt } -> { ...; stmt_that_returns; noop }
                     // { ...; stmt; pure_non_value_stmt } -> { ...; stmt }
                     [.., ref second_last_stmt, ref last_stmt]
-                        if !last_stmt.returns_value() && is_pure_for_this_block(last_stmt) =>
+                        if !returns_value(last_stmt) && is_pure_for_this_block(last_stmt) =>
                     {
                         state.set_dirty();
-                        if second_last_stmt.returns_value() {
+                        if returns_value(second_last_stmt) {
                             *statements.last_mut().unwrap() = Stmt::Noop(last_stmt.position());
                         } else {
                             statements.pop().unwrap();
@@ -828,15 +842,20 @@ fn optimize_stmt(stmt: &mut Stmt, state: &mut OptimizerState, preserve_result: b
             state.set_dirty();
             let statements = x.body.take_statements();
             let block = StmtBlock::new_with_span(
-                optimize_stmt_block(statements, state, false, true, false),
+                optimize_stmt_block(statements, state, preserve_result, true, false),
                 x.body.span(),
             );
             *stmt = Stmt::Block(block.into());
         }
         // try { try_block } catch ( var ) { catch_block }
         Stmt::TryCatch(x, ..) => {
-            *x.body.statements_mut() =
-                optimize_stmt_block(x.body.take_statements(), state, false, true, false);
+            *x.body.statements_mut() = optimize_stmt_block(
+                x.body.take_statements(),
+                state,
+                preserve_result,
+                true,
+                false,
+            );
             *x.branch.statements_mut() =
                 optimize_stmt_block(x.branch.take_statements(), state, false, true, false);
         }
@@ -972,17 +991,15 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
         Expr::Dot(x, ..) if !_chaining => match (&mut x.lhs, &mut x.rhs) {
             // map.string
             (Expr::Map(m, pos), Expr::Property(p, ..)) if m.0.iter().all(|(.., x)| x.is_pure()) => {
-                if m.1.contains_key(p.2.as_str()) {
-                    // Constant map literal property
-                    state.set_dirty();
-                    *expr = Expr::from_dynamic(mem::take(m.1.get_mut(p.2.as_str()).unwrap()).into(), *pos);
-                } else {
-                    // Map literal where everything is pure - promote the indexed item.
-                    // All other items can be thrown away.
-                    state.set_dirty();
-                    *expr = mem::take(&mut m.0).into_iter().find(|(x, ..)| x.name == p.2)
-                                .map_or_else(|| Expr::Unit(*pos), |(.., mut expr)| { expr.set_position(*pos); expr });
-                }
+                // Map literal where everything is pure - promote the indexed item.
+                // All other items can be thrown away.
+                // The template holds every key, with `()` standing in for a value that is
+                // not a constant, so look among the non-constant values first.
+                state.set_dirty();
+                *expr = match mem::take(&mut m.0).into_iter().find(|(x, ..)| x.name == p.2) {
+                    Some((.., mut expr)) => { expr.set_position(*pos); expr }
+                    None => m.1.get_mut(p.2.as_str()).map_or_else(|| Expr::Unit(*pos), |v| Expr::from_dynamic(mem::take(v), *pos)),
+                };
             }
             // var.property where var is a constant map
             (Expr::Variable(v, _, pos) , Expr::Property(p, ..))  if state.propagate_constants && state.find_literal_constant(&v.1).map_or(false,Dynamic::is_map) => {
@@ -1045,17 +1062,15 @@ fn optimize_expr(expr: &mut Expr, state: &mut OptimizerState, _chaining: bool) {
             }
             // map[string]
             (Expr::Map(m, pos), Expr::StringConstant(s, ..)) if m.0.iter().all(|(.., x)| x.is_pure()) => {
-                if m.1.contains_key(s.as_str()) {
-                    // Constant map literal property
-                    state.set_dirty();
-                    *expr = Expr::from_dynamic(mem::take(m.1.get_mut(s.as_str()).unwrap()).into(), *pos);
-                } else {
-                    // Map literal where everything is pure - promote the indexed item.
-                    // All other items can be thrown away.
-                    state.set_dirty();
-                    *expr = mem::take(&mut m.0).into_iter().find(|(x, ..)| x.name == s)
-                                .map_or_else(|| Expr::Unit(*pos), |(.., mut expr)| { expr.set_position(*pos); expr });
-                }
+                // Map literal where everything is pure - promote the indexed item.
+                // All other items can be thrown away.
+                // The template holds every key, with `()` standing in for a value that is
+                // not a constant, so look among the non-constant values first.
+                state.set_dirty();
+                *expr = match mem::take(&mut m.0).into_iter().find(|(x, ..)| x.name == s) {
+                    Some((.., mut expr)) => { expr.set_position(*pos); expr }
+                    None => m.1.get_mut(s.as_str()).map_or_else(|| Expr::Unit(*pos), |v| Expr::from_dynamic(mem::take(v), *pos)),
+                };
             }
             // map[string] - constant
             #[cfg(not(feature = "no_object"))]
