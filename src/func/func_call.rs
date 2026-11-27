@@ -272,7 +272,11 @@ impl Drop for ArgBackup<'_> {
 #[cfg(not(feature = "no_closure"))]
 #[cfg(not(feature = "unchecked"))]
 #[inline]
-pub fn ensure_no_data_race(fn_name: &str, args: &FnCallArgs, is_ref_mut: bool) -> RhaiResultOf<()> {
+pub fn ensure_no_data_race(
+    fn_name: &str,
+    args: &FnCallArgs,
+    is_ref_mut: bool,
+) -> RhaiResultOf<()> {
     args.iter()
         .skip(usize::from(is_ref_mut))
         .position(|a| a.is_locked())
@@ -289,7 +293,11 @@ impl Engine {
     /// Generate the signature for a function call.
     #[inline]
     #[must_use]
-    pub(crate) fn gen_fn_call_signature(&self, fn_name: &str, args: &[&mut Dynamic]) -> String {
+    pub(crate) fn gen_fn_call_signature(
+        &self,
+        fn_name: &str,
+        args: &[&mut Dynamic],
+    ) -> String {
         format!(
             "{fn_name} ({})",
             args.iter()
@@ -344,14 +352,16 @@ impl Engine {
         match syntactic {
             // Handle type_of()
             SyntacticFn::TypeOf if args.len() == 1 => {
-                let typ = self.get_interned_string(self.map_type_name(args[0].type_name()));
+                let typ =
+                    self.get_interned_string(self.map_type_name(args[0].type_name()));
                 return Ok(typ.into());
             },
             SyntacticFn::TypeOf => (),
 
             // Handle is_shared()
             #[cfg(not(feature = "no_closure"))]
-            SyntacticFn::IsShared if args.len() == 1 => return Ok(args[0].is_shared().into()),
+            SyntacticFn::IsShared if args.len() == 1 =>
+                return Ok(args[0].is_shared().into()),
             #[cfg(not(feature = "no_closure"))]
             SyntacticFn::IsShared => (),
 
@@ -360,9 +370,9 @@ impl Engine {
             SyntacticFn::IsDefFn if args.len() == 2 => {
                 use std::convert::TryFrom;
 
-                let fn_name = args[0]
-                    .as_immutable_string_ref()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, pos))?;
+                let fn_name = args[0].as_immutable_string_ref().map_err(|typ| {
+                    self.make_type_mismatch_err::<ImmutableString>(typ, pos)
+                })?;
                 let num_params = args[1]
                     .as_int()
                     .map_err(|typ| self.make_type_mismatch_err::<crate::INT>(typ, pos))?;
@@ -377,12 +387,12 @@ impl Engine {
             #[cfg(not(feature = "no_function"))]
             #[cfg(not(feature = "no_object"))]
             SyntacticFn::IsDefFn if args.len() == 3 => {
-                let this_type = args[0]
-                    .as_immutable_string_ref()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, pos))?;
-                let fn_name = args[1]
-                    .as_immutable_string_ref()
-                    .map_err(|typ| self.make_type_mismatch_err::<ImmutableString>(typ, pos))?;
+                let this_type = args[0].as_immutable_string_ref().map_err(|typ| {
+                    self.make_type_mismatch_err::<ImmutableString>(typ, pos)
+                })?;
+                let fn_name = args[1].as_immutable_string_ref().map_err(|typ| {
+                    self.make_type_mismatch_err::<ImmutableString>(typ, pos)
+                })?;
                 let num_params = args[2]
                     .as_int()
                     .map_err(|typ| self.make_type_mismatch_err::<crate::INT>(typ, pos))?;
@@ -403,7 +413,10 @@ impl Engine {
             SyntacticFn::Other => (),
         }
 
-        Err(ERR::ErrorFunctionNotFound(self.gen_fn_call_signature(fn_name, args), pos).into())
+        Err(
+            ERR::ErrorFunctionNotFound(self.gen_fn_call_signature(fn_name, args), pos)
+                .into(),
+        )
     }
 
     /// Resolve a normal (non-qualified) function call.
@@ -465,7 +478,9 @@ impl Engine {
                             self.global_sub_modules
                                 .values()
                                 .filter(|m| m.contains_indexed_global_functions())
-                                .find_map(|m| m.get_qualified_fn(hash).map(|f| (f, m.id_raw())))
+                                .find_map(|m| {
+                                    m.get_qualified_fn(hash).map(|f| (f, m.id_raw()))
+                                })
                         });
 
                     if let Some((f, s)) = func {
@@ -519,14 +534,20 @@ impl Engine {
                     if bitmask >= max_bitmask {
                         // Try to find a built-in version
                         let builtin =
-                            args.filter(|_| num_args == 2)
-                                .and_then(|args| match op_token {
+                            args.filter(|_| num_args == 2).and_then(
+                                |args| match op_token {
                                     None => None,
                                     Some(token) if token.is_op_assignment() => {
-                                        let (first_arg, rest_args) = args.split_first().unwrap();
+                                        let (first_arg, rest_args) =
+                                            args.split_first().unwrap();
 
-                                        get_builtin_op_assignment_fn(token, first_arg, rest_args[0])
-                                            .map(|(f, has_context)| FnResolutionCacheEntry {
+                                        get_builtin_op_assignment_fn(
+                                            token,
+                                            first_arg,
+                                            rest_args[0],
+                                        )
+                                        .map(
+                                            |(f, has_context)| FnResolutionCacheEntry {
                                                 func: RhaiFunc::Method {
                                                     func: Shared::new(f),
                                                     has_context,
@@ -534,21 +555,24 @@ impl Engine {
                                                     is_volatile: false,
                                                 },
                                                 source: None,
-                                            })
+                                            },
+                                        )
                                     },
-                                    Some(token) => get_builtin_binary_op_fn(
-                                        token, args[0], args[1],
-                                    )
-                                    .map(|(f, has_context)| FnResolutionCacheEntry {
-                                        func: RhaiFunc::Method {
-                                            func: Shared::new(f),
-                                            has_context,
-                                            is_pure: true,
-                                            is_volatile: false,
-                                        },
-                                        source: None,
-                                    }),
-                                });
+                                    Some(token) =>
+                                        get_builtin_binary_op_fn(token, args[0], args[1])
+                                            .map(|(f, has_context)| {
+                                                FnResolutionCacheEntry {
+                                                    func: RhaiFunc::Method {
+                                                        func: Shared::new(f),
+                                                        has_context,
+                                                        is_pure: true,
+                                                        is_volatile: false,
+                                                    },
+                                                    source: None,
+                                                }
+                                            }),
+                                },
+                            );
 
                         return if cache.bloom_filter.is_absent_and_set(hash) {
                             // Do not cache "one-hit wonders"
@@ -593,7 +617,6 @@ impl Engine {
     /// All function arguments not in the first position are always passed by value and thus consumed.
     ///
     /// **DO NOT** reuse the argument values except for the first `&mut` argument - all others are silently replaced by `()`!
-    #[expect(const_item_mutation)]
     pub(crate) fn exec_native_fn_call(
         &self,
         global: &mut GlobalRuntimeState,
@@ -613,7 +636,9 @@ impl Engine {
         #[cfg(not(feature = "unchecked"))]
         ensure_no_data_race(name, args, is_ref_mut)?;
 
-        if let Some(result) = self.exec_syntactic_fn_call(global, caches, name, args, pos)? {
+        if let Some(result) =
+            self.exec_syntactic_fn_call(global, caches, name, args, pos)?
+        {
             return Ok((result, false));
         }
 
@@ -676,10 +701,12 @@ impl Engine {
 
             let mut _result = match func {
                 f if !f.is_pure() && args.get(0).map_or(false, |v| v.is_read_only()) =>
-                    Err(ERR::ErrorNonPureMethodCallOnConstant(name.to_string(), pos).into()),
+                    Err(ERR::ErrorNonPureMethodCallOnConstant(name.to_string(), pos)
+                        .into()),
                 RhaiFunc::Plugin { func } => func.call(context, args),
                 RhaiFunc::StaticPlugin { func } => func.call(context, args),
-                RhaiFunc::Pure { func, .. } | RhaiFunc::Method { func, .. } => func(context, args),
+                RhaiFunc::Pure { func, .. } | RhaiFunc::Method { func, .. } =>
+                    func(context, args),
                 _ => unreachable!("non-native function"),
             }
             .and_then(|r| self.check_data_size(r, pos))
@@ -726,7 +753,8 @@ impl Engine {
                 KEYWORD_PRINT => {
                     if let Some(ref print) = self.print {
                         let text = result.into_immutable_string().map_err(|typ| {
-                            let t = self.map_type_name(type_name::<ImmutableString>()).into();
+                            let t =
+                                self.map_type_name(type_name::<ImmutableString>()).into();
                             ERR::ErrorMismatchOutputType(t, typ.into(), pos)
                         })?;
                         print(&text);
@@ -736,7 +764,8 @@ impl Engine {
                 KEYWORD_DEBUG => {
                     if let Some(ref debug) = self.debug {
                         let text = result.into_immutable_string().map_err(|typ| {
-                            let t = self.map_type_name(type_name::<ImmutableString>()).into();
+                            let t =
+                                self.map_type_name(type_name::<ImmutableString>()).into();
                             ERR::ErrorMismatchOutputType(t, typ.into(), pos)
                         })?;
                         debug(&text, global.source(), pos);
@@ -844,8 +873,11 @@ impl Engine {
             },
 
             // Raise error
-            _ =>
-                Err(ERR::ErrorFunctionNotFound(self.gen_fn_call_signature(name, args), pos).into()),
+            _ => Err(ERR::ErrorFunctionNotFound(
+                self.gen_fn_call_signature(name, args),
+                pos,
+            )
+            .into()),
         }
     }
 
@@ -879,7 +911,9 @@ impl Engine {
         ensure_no_data_race(fn_name, args, is_ref_mut)?;
 
         // These may be redirected from method style calls.
-        if let Some(result) = self.exec_syntactic_fn_call(global, caches, fn_name, args, pos)? {
+        if let Some(result) =
+            self.exec_syntactic_fn_call(global, caches, fn_name, args, pos)?
+        {
             return Ok((result, false));
         }
 
@@ -894,14 +928,24 @@ impl Engine {
 
             #[cfg(not(feature = "no_object"))]
             if _is_method_call && !args.is_empty() {
-                let typed_hash =
-                    crate::calc_typed_method_hash(hash, self.map_type_name(args[0].type_name()));
-                resolved =
-                    self.resolve_fn(global, caches, local_entry, None, typed_hash, None, false);
+                let typed_hash = crate::calc_typed_method_hash(
+                    hash,
+                    self.map_type_name(args[0].type_name()),
+                );
+                resolved = self.resolve_fn(
+                    global,
+                    caches,
+                    local_entry,
+                    None,
+                    typed_hash,
+                    None,
+                    false,
+                );
             }
 
             if resolved.is_none() {
-                resolved = self.resolve_fn(global, caches, local_entry, None, hash, None, false);
+                resolved =
+                    self.resolve_fn(global, caches, local_entry, None, hash, None, false);
             }
 
             if let Some(FnResolutionCacheEntry { func, source }) = resolved.cloned() {
@@ -1108,15 +1152,19 @@ impl Engine {
                 let env = env.as_deref();
                 let scope = &mut Scope::new();
 
-                let orig_source = std::mem::replace(&mut global.source, module.id_raw().cloned());
+                let orig_source =
+                    std::mem::replace(&mut global.source, module.id_raw().cloned());
                 defer! { global => move |g| g.source = orig_source }
                 let global = global.into();
 
-                self.call_script_fn(global, _caches, scope, None, env, fn_def, args, true, pos)
+                self.call_script_fn(
+                    global, _caches, scope, None, env, fn_def, args, true, pos,
+                )
             },
 
-            Some(f) if !f.is_pure() && args[0].is_read_only() =>
-                Err(ERR::ErrorNonPureMethodCallOnConstant(fn_name.to_string(), pos).into()),
+            Some(f) if !f.is_pure() && args[0].is_read_only() => Err(
+                ERR::ErrorNonPureMethodCallOnConstant(fn_name.to_string(), pos).into(),
+            ),
 
             Some(f @ (RhaiFunc::Plugin { .. } | RhaiFunc::StaticPlugin { .. })) => {
                 let func = f.get_plugin_fn().unwrap();
@@ -1135,8 +1183,8 @@ impl Engine {
                     func, has_context, ..
                 },
             ) => {
-                let context =
-                    has_context.then(|| (self, fn_name, module.id(), &*global, pos).into());
+                let context = has_context
+                    .then(|| (self, fn_name, module.id(), &*global, pos).into());
                 func(context, args).and_then(|r| self.check_data_size(r, pos))
             },
 
